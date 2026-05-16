@@ -5,10 +5,14 @@ import os
 import time
 from datetime import datetime
 import plotly.express as px
+import streamlit.components.v1 as components
+import base64
 
-# 1. 초기 설정
-IMG_DIR = "beer_images"
-DB_FILE = "beer_pro.db"
+# --- [수정] 실행 중인 파일의 절대 경로를 기준으로 폴더 지정 ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+IMG_DIR = os.path.join(BASE_DIR, "beer_images")
+DB_FILE = os.path.join(BASE_DIR, "beer_pro.db")
+
 if not os.path.exists(IMG_DIR):
     os.makedirs(IMG_DIR)
 
@@ -24,39 +28,53 @@ def init_db():
     conn.commit()
     return conn
 
-def safe_float(val, default=0.0):
-    try: return float(val) if val is not None else default
-    except: return default
-
 conn = init_db()
 df = pd.read_sql_query("SELECT * FROM beers", conn)
 
-st.set_page_config(page_title="Beer Note Pro v3.6", layout="wide", page_icon="🍺")
+st.set_page_config(page_title="Beer Note Pro v4.0", layout="wide", page_icon="🍺")
 
-# 이미지 크기 강제 조절 CSS (120px 고정)
-st.markdown("""
-    <style>
-        div[data-testid="stImage"] img {
-            height: 120px !important;
-            width: auto !important;
-            object-fit: contain !important;
-            border-radius: 8px;
-            border: 1px solid #f0f0f0;
-        }
-        .beer-card {
-            padding: 10px;
-            border-radius: 10px;
-            border: 1px solid #eee;
-            margin-bottom: 10px;
-        }
-    </style>
-""", unsafe_allow_html=True)
+# --- [수정] 대소문자 및 경로 문제를 방지하는 Base64 변환 함수 ---
+def get_image_base64(path):
+    if not path:
+        return None
+        
+    # DB에 저장된 경로가 상대경로라면 절대경로로 보정
+    if not os.path.isabs(path):
+        # 만약 경로에 'beer_images/'가 중복으로 들어가는 것을 방지
+        filename = os.path.basename(path)
+        actual_path = os.path.join(IMG_DIR, filename)
+    else:
+        actual_path = path
 
-# 맥주 종류 목록 업데이트 (Hazy 스타일 추가)
-BEER_STYLES = [
-    "Lager", "IPA", "Hazy IPA", "Pale Ale", "Hazy Pale Ale", 
-    "Stout", "Pilsner", "Wheat", "Sour", "Porter", "기타"
-]
+    # 파일 존재 여부 확인 (리눅스 서버 대응)
+    if os.path.exists(actual_path):
+        with open(actual_path, "rb") as f:
+            data = f.read()
+            return base64.b64encode(data).decode()
+    return None
+
+def render_custom_image(img_path):
+    b64_str = get_image_base64(img_path)
+    if b64_str:
+        html_code = f"""
+        <div style="display: flex; justify-content: center; align-items: center; 
+                    height: 120px; width: 100%; background-color: #f9f9f9; 
+                    border-radius: 10px; border: 1px solid #eee; overflow: hidden;">
+            <img src="data:image/jpeg;base64,{b64_str}" 
+                 style="max-height: 100%; max-width: 100%; object-fit: contain;">
+        </div>
+        """
+    else:
+        html_code = """
+        <div style="display: flex; justify-content: center; align-items: center; 
+                    height: 120px; width: 100%; background-color: #f9f9f9; 
+                    border-radius: 10px; border: 1px solid #eee; color: #999; font-size: 14px;">
+            📷 No Photo
+        </div>
+        """
+    components.html(html_code, height=130)
+
+BEER_STYLES = ["Lager", "IPA", "Hazy IPA", "Pale Ale", "Hazy Pale Ale", "Stout", "Pilsner", "Wheat", "Sour", "Porter", "기타"]
 
 # --- 사이드바 ---
 st.sidebar.header("📝 새 맥주 기록")
@@ -67,23 +85,28 @@ with st.sidebar.form("beer_form", clear_on_submit=True):
     col_in1, col_in2 = st.columns(2)
     abv = col_in1.number_input("도수 (%)", 0.0, 25.0, 0.0, 0.1)
     price = col_in2.number_input("가격 ($)", 0.0, 1000.0, 0.0, 0.1)
-    uploaded_file = st.file_uploader("라벨 사진 업로드", type=['jpg', 'png', 'jpeg'])
+    uploaded_file = st.file_uploader("라벨 사진", type=['jpg', 'png', 'jpeg'])
     
     st.write("---")
-    sc_cols = st.columns(2)
-    sc1 = sc_cols[0].slider("향", 1, 5, 1)
-    sc2 = sc_cols[1].slider("맛", 1, 5, 1)
-    sc3 = sc_cols[0].slider("바디감", 1, 5, 1)
-    sc4 = sc_cols[1].slider("밸런스", 1, 5, 1)
+    sc1 = st.slider("향", 1, 5, 1)
+    sc2 = st.slider("맛", 1, 5, 1)
+    sc3 = st.slider("바디감", 1, 5, 1)
+    sc4 = st.slider("밸런스", 1, 5, 1)
     comment = st.text_area("시음평")
     
     if st.form_submit_button("기록 저장"):
         if name:
             avg = round((sc1 + sc2 + sc3 + sc4) / 4, 2)
-            img_path = ""
+            # 파일명을 저장할 때 폴더명 포함 구조로 통일
+            filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{name}.jpg"
+            img_path = os.path.join(IMG_DIR, filename)
+            
             if uploaded_file:
-                img_path = os.path.join(IMG_DIR, f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{name}.jpg")
-                with open(img_path, "wb") as f: f.write(uploaded_file.getbuffer())
+                with open(img_path, "wb") as f: 
+                    f.write(uploaded_file.getbuffer())
+            else:
+                img_path = ""
+                
             cur = conn.cursor()
             cur.execute("INSERT INTO beers (날짜, 이름, 제조사, 종류, 도수, 가격, 향, 맛, 바디감, 밸런스, 종합평점, 한줄평, 이미지경로) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (datetime.now().strftime("%Y-%m-%d"), name, company, beer_type, abv, price, sc1, sc2, sc3, sc4, avg, comment, img_path))
@@ -99,20 +122,16 @@ with tab1:
     view_df = df[df['이름'].str.contains(search, case=False) | df['제조사'].str.contains(search, case=False)] if search else df
     
     for _, row in view_df.sort_values("날짜", ascending=False).iterrows():
-        st.markdown(f'<div class="beer-card">', unsafe_allow_html=True)
-        c1, c2, c3 = st.columns([1, 3, 1])
-        with c1:
-            if row['이미지경로'] and os.path.exists(row['이미지경로']):
-                st.image(row['이미지경로'], use_container_width=False)
-            else:
-                st.write("📷 사진 없음")
-        with c2:
-            st.subheader(row['이름'])
-            st.write(f"**{row['종류']}** | {row['제조사']} | {row['도수']}%")
-            st.caption(row['한줄평'])
-        with c3:
-            st.metric("평점", f"⭐ {row['종합평점']}")
-        st.markdown('</div>', unsafe_allow_html=True)
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([1.5, 3, 1])
+            with c1:
+                render_custom_image(row['이미지경로'])
+            with c2:
+                st.subheader(row['이름'])
+                st.write(f"**{row['종류']}** | {row['제조사']} | {row['도수']}%")
+                st.caption(row['한줄평'])
+            with c3:
+                st.metric("평점", f"⭐ {row['종합평점']}")
 
 with tab2:
     if not df.empty:
@@ -122,39 +141,36 @@ with tab2:
 
 with tab3:
     if not df.empty:
-        choice = st.selectbox("기록 선택", df.index, format_func=lambda i: f"{df.at[i, '이름']} ({df.at[i, '날짜']})")
+        choice = st.selectbox("수정할 기록 선택", df.index, format_func=lambda i: f"{df.at[i, '이름']} ({df.at[i, '날짜']})")
         row = df.loc[choice]
         
         with st.form("edit_form"):
             st.subheader("✏️ 정보 수정")
-            col_e1, col_e2 = st.columns([1, 2])
+            col_e1, col_e2 = st.columns([1.5, 2])
             with col_e1:
-                if row['이미지경로'] and os.path.exists(row['이미지경로']):
-                    st.image(row['이미지경로'], use_container_width=False)
-                u_file = st.file_uploader("사진 변경", type=['jpg', 'png', 'jpeg'])
+                st.write("**현재 이미지**")
+                render_custom_image(row['이미지경로'])
+                u_file = st.file_uploader("이미지 교체", type=['jpg', 'png', 'jpeg'])
             with col_e2:
                 u_name = st.text_input("이름", row["이름"])
                 u_comp = st.text_input("제조사", row["제조사"])
-                # 수정 시에도 추가된 종류를 올바르게 인식하도록 설정
-                try: current_style_index = BEER_STYLES.index(row["종류"])
-                except: current_style_index = 0
-                u_type = st.selectbox("종류", BEER_STYLES, index=current_style_index)
-                u_abv = st.number_input("도수", 0.0, 25.0, safe_float(row["도수"]))
-                u_price = st.number_input("가격", 0.0, 1000.0, safe_float(row["가격"]))
+                u_type = st.selectbox("종류", BEER_STYLES, index=BEER_STYLES.index(row["종류"]) if row["종류"] in BEER_STYLES else 0)
+                u_abv = st.number_input("도수", 0.0, 25.0, float(row["도수"]))
+                u_price = st.number_input("가격", 0.0, 1000.0, float(row["가격"]))
             
             st.write("---")
-            se_cols = st.columns(4)
-            u_sc1 = se_cols[0].slider("향", 1, 5, int(row["향"]))
-            u_sc2 = se_cols[1].slider("맛", 1, 5, int(row["맛"]))
-            u_sc3 = se_cols[2].slider("바디감", 1, 5, int(row["바디감"]))
-            u_sc4 = se_cols[3].slider("밸런스", 1, 5, int(row["밸런스"]))
+            u_sc1 = st.slider("향", 1, 5, int(row["향"]), key="e1")
+            u_sc2 = st.slider("맛", 1, 5, int(row["맛"]), key="e2")
+            u_sc3 = st.slider("바디감", 1, 5, int(row["바디감"]), key="e3")
+            u_sc4 = st.slider("밸런스", 1, 5, int(row["밸런스"]), key="e4")
             u_comm = st.text_area("시음평", value=str(row["한줄평"]))
             
-            if st.form_submit_button("💾 수정 저장"):
+            if st.form_submit_button("💾 수정사항 저장"):
                 u_avg = round((u_sc1 + u_sc2 + u_sc3 + u_sc4) / 4, 2)
                 final_path = row['이미지경로']
                 if u_file:
-                    final_path = os.path.join(IMG_DIR, f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{u_name}.jpg")
+                    filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{u_name}.jpg"
+                    final_path = os.path.join(IMG_DIR, filename)
                     with open(final_path, "wb") as f: f.write(u_file.getbuffer())
                 cur = conn.cursor()
                 cur.execute("""UPDATE beers SET 이름=?, 제조사=?, 종류=?, 도수=?, 가격=?, 향=?, 맛=?, 바디감=?, 밸런스=?, 종합평점=?, 한줄평=?, 이미지경로=? 
@@ -162,9 +178,13 @@ with tab3:
                 conn.commit()
                 st.success("수정 완료!"); time.sleep(0.5); st.rerun()
             
-        if st.button("🗑️ 삭제"):
-            if row['이미지경로'] and os.path.exists(row['이미지경로']): os.remove(row['이미지경로'])
+        if st.button("🗑️ 영구 삭제"):
+            if row['이미지경로']:
+                filename = os.path.basename(row['이미지경로'])
+                actual_path = os.path.join(IMG_DIR, filename)
+                if os.path.exists(actual_path):
+                    os.remove(actual_path)
             cur = conn.cursor()
             cur.execute("DELETE FROM beers WHERE id=?", (int(row['id']),))
             conn.commit()
-            st.warning("삭제됨"); time.sleep(0.5); st.rerun()
+            st.warning("삭제 완료"); time.sleep(0.5); st.rerun()
